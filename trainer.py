@@ -7,7 +7,8 @@ from torch import save as save_dict
 
 class Trainer:
     def __init__(self, model, optimizer, loss_fn, train_dataloader, scheduler=None,
-                 epochs=1, device='cpu', seed=None, validation_dataloader = None, validation_inference_epoch_step=1):
+                 epochs: int=1, device='cpu', seed=None, validation_dataloader = None, validation_inference_epoch_step: int=1,
+                 snapshop_step: int=0):
         """
         Trainer function. Takes a PyTorch ANN model and a train DataLoader and trains the model
 
@@ -24,6 +25,7 @@ class Trainer:
                 after every training epoch. If no validation dataloader is provided the testing will be skipped. (default: ``None``)
             validation_inference_step (int): Report training (and validation, if valloader is not None) accuracy and loss after
                 every number of epochs (default: ``1``).
+            snapshop_step (int): Save model weights every ``step`` epochs, if set to greater than 0.
         """
 
         self.__model = model
@@ -36,6 +38,7 @@ class Trainer:
         self.__seed = seed
         self.__valloader = validation_dataloader
         self.__validation_inference_epoch_step = validation_inference_epoch_step
+        self.__snapshop_step = snapshop_step
 
         self.__train_progess = {
                 'batch':[],
@@ -75,7 +78,7 @@ class Trainer:
             self.__model.train()
 
             batch_iterator = tqdm(self.__trainloader, total=len(self.__trainloader), desc="Batch: ", leave=False, position=1)            
-            for batch_idx, (X_train, y_train) in enumerate(batch_iterator):
+            for train_batch_idx, (X_train, y_train) in enumerate(batch_iterator):
 
                 X_train, y_train = X_train.to(self.__device), y_train.to(self.__device)
                 y_pred = self.__model(X_train)
@@ -95,7 +98,12 @@ class Trainer:
                 running_loss += train_loss.item()
 
                 # Report train progress to tqdm
-                batch_iterator.set_postfix_str(f"Train loss: {running_loss / (batch_idx+1):.4f} | Train accuracy: {running_acc / (TRAIN_BATCH_SIZE * (batch_idx+1)) * 100:.2f}%")
+                batch_iterator.set_postfix_str(f"Train running loss: {running_loss / (train_batch_idx+1):.4f} 
+                                               | Train running accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%") 
+                                                                            #correct_preds / (batch size * nth batch) + last batch size
+            # Save snapshot
+            if self.__snapshop_step > 0 and self.__snapshop_step % epoch+1 == 0:
+                self.save_model_dictionary(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)
 
             if self.__valloader:
                 if epoch % self.__validation_inference_epoch_step == 0 or epoch == self.__epochs-1:
@@ -107,7 +115,7 @@ class Trainer:
 
                         vallidation_batch_iterator = tqdm(self.__valloader, total=len(self.__valloader), desc="Validation: ", leave=False, position=2)
 
-                        for batch, (X_test, y_test) in enumerate(vallidation_batch_iterator):
+                        for val_batch_idx, (X_test, y_test) in enumerate(vallidation_batch_iterator):
                             X_test, y_test = X_test.to(self.__device), y_test.to(self.__device)
 
                             y_pred_test = self.__model(X_test)
@@ -121,7 +129,12 @@ class Trainer:
                             running_acc += (argmax(y_pred_test, dim=1) == y_test).sum().item() / len(y_test)
 
             
-            epoch_iterator.set_postfix_str(f"Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
+            if self.__valloader:
+                epoch_iterator.set_postfix_str(f"Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} 
+                                               | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
+            else:
+                epoch_iterator.set_postfix_str(f"Previous epoch: Training loss: {running_loss / (train_batch_idx+1):.4f} 
+                                               | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
 
             if self.__scheduler:
                 # print('Step called')
@@ -153,7 +166,6 @@ class Trainer:
 
 
     def save_model_dictionary(self, filepath, append_accuracy=False):
-
         dir = os.path.dirname(filepath)
         filename, ext = os.path.splitext(os.path.basename(filepath))
 
