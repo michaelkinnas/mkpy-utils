@@ -127,35 +127,33 @@ class Trainer:
                 self.save_model_dictionary(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)
 
             if self.__valloader:
-                if epoch % self.__validation_inference_epoch_step == 0 or epoch == self.__epochs-1:
-                    running_acc = 0
-                    running_loss = 0
+                running_loss, running_acc = self.__validation(epoch, record_validation_progress)
+                # if epoch % self.__validation_inference_epoch_step == 0 or epoch == self.__epochs-1:
+                #     running_acc = 0
+                #     running_loss = 0
 
-                    self.__model.eval()
-                    with inference_mode():
+                #     self.__model.eval()
+                #     with inference_mode():
 
-                        vallidation_batch_iterator = tqdm(self.__valloader, total=len(self.__valloader), desc="Validation: ", leave=False, position=2)
+                #         vallidation_batch_iterator = tqdm(self.__valloader, total=len(self.__valloader), desc="Validation: ", leave=False, position=2)
+                #         for val_batch_idx, (X_test, y_test) in enumerate(vallidation_batch_iterator):
+                #             X_test, y_test = X_test.to(self.__device), y_test.to(self.__device)
 
-                        for val_batch_idx, (X_test, y_test) in enumerate(vallidation_batch_iterator):
-                            X_test, y_test = X_test.to(self.__device), y_test.to(self.__device)
+                #             y_pred_test = self.__model(X_test)
 
-                            y_pred_test = self.__model(X_test)
+                #             if y_pred_test.shape[-1] == 1:
+                #                 y_test = y_test.unsqueeze(dim=1).float()
 
-                            if y_pred_test.shape[-1] == 1:
-                                y_test = y_test.unsqueeze(dim=1).float()
+                #             val_loss = self.__loss_fn(y_pred_test, y_test)
 
-                            val_loss = self.__loss_fn(y_pred_test, y_test)
+                #             loss = val_loss.item()
+                #             running_loss += loss
 
-                            loss = val_loss.item()
-                            running_loss += loss
+                #             accuracy = (argmax(y_pred_test, dim=1) == y_test).sum().item() / len(y_test)
+                #             running_acc += accuracy
 
-                            accuracy = (argmax(y_pred_test, dim=1) == y_test).sum().item() / len(y_test)
-                            running_acc += accuracy
-
-                            if record_validation_progress:
-                                self.__record_validation_step(loss, 
-                                                            accuracy,                                                
-                                                            epoch)
+                #             if record_validation_progress: 
+                #                 self.__record_validation_step(loss, accuracy, epoch)
 
             
             if self.__valloader:
@@ -166,6 +164,36 @@ class Trainer:
             if self.__scheduler:
                 self.__scheduler.step()
 
+
+    def __validation(self, epoch, record_validation_progress):
+        if epoch % self.__validation_inference_epoch_step == 0 or epoch == self.__epochs-1:
+            running_acc = 0
+            running_loss = 0
+
+            self.__model.eval()
+            with inference_mode():
+
+                vallidation_batch_iterator = tqdm(self.__valloader, total=len(self.__valloader), desc="Validation: ", leave=False, position=2)
+                for val_batch_idx, (X_test, y_test) in enumerate(vallidation_batch_iterator):
+                    X_test, y_test = X_test.to(self.__device), y_test.to(self.__device)
+
+                    y_pred_test = self.__model(X_test)
+
+                    if y_pred_test.shape[-1] == 1:
+                        y_test = y_test.unsqueeze(dim=1).float()
+
+                    val_loss = self.__loss_fn(y_pred_test, y_test)
+
+                    loss = val_loss.item()
+                    running_loss += loss
+
+                    accuracy = (argmax(y_pred_test, dim=1) == y_test).sum().item() / len(y_test)
+                    running_acc += accuracy
+
+                    if record_validation_progress: 
+                        self.__record_validation_step(loss, accuracy, epoch)
+            
+            return running_loss, running_acc
 
 
     def __record_training_step(self, loss, accuracy, batch, epoch):
