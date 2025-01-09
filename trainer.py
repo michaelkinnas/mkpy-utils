@@ -125,38 +125,9 @@ class Trainer:
             # Save snapshot
             if self.__snapshop_step > 0 and self.__snapshop_step % epoch+1 == 0:
                 self.save_model_dictionary(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)
-
-            if self.__valloader:
-                running_loss, running_acc = self.__validation(epoch, record_validation_progress)
-                # if epoch % self.__validation_inference_epoch_step == 0 or epoch == self.__epochs-1:
-                #     running_acc = 0
-                #     running_loss = 0
-
-                #     self.__model.eval()
-                #     with inference_mode():
-
-                #         vallidation_batch_iterator = tqdm(self.__valloader, total=len(self.__valloader), desc="Validation: ", leave=False, position=2)
-                #         for val_batch_idx, (X_test, y_test) in enumerate(vallidation_batch_iterator):
-                #             X_test, y_test = X_test.to(self.__device), y_test.to(self.__device)
-
-                #             y_pred_test = self.__model(X_test)
-
-                #             if y_pred_test.shape[-1] == 1:
-                #                 y_test = y_test.unsqueeze(dim=1).float()
-
-                #             val_loss = self.__loss_fn(y_pred_test, y_test)
-
-                #             loss = val_loss.item()
-                #             running_loss += loss
-
-                #             accuracy = (argmax(y_pred_test, dim=1) == y_test).sum().item() / len(y_test)
-                #             running_acc += accuracy
-
-                #             if record_validation_progress: 
-                #                 self.__record_validation_step(loss, accuracy, epoch)
-
             
             if self.__valloader:
+                running_loss, running_acc = self.__validation(epoch, record_validation_progress)
                 epoch_iterator.set_postfix_str(f"Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
             else:
                 epoch_iterator.set_postfix_str(f"Previous epoch: Training loss: {running_loss / (train_batch_idx+1):.4f} | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
