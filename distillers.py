@@ -9,7 +9,6 @@ import time
 import os
 
 
-
 class ResponseDistiller:
     def __init__(self, teacher, student, optimizer, loss_fn, train_dataloader, validation_dataloader = None, lr_scheduler=None,
                  epochs: int=2, alpha=0.2, soft_loss_temp = 1, final_loss_temp = 1, device='auto', seed=None, validation_step: int=1, checkpoint_step: int=0):
@@ -75,10 +74,6 @@ class ResponseDistiller:
 
     
     def distill(self, record_train_progress=False, record_validation_progress=False, window: int = 20, use_tqdm=True):
-        # if self.__seed:
-        #     manual_seed(self.__seed)
-        
-        #should i provide loss function from outside the class
         # hard_target_loss_fn = CrossEntropyLoss()                 #in case of multiclass classification
         distillation_loss_fn = KLDivLoss(reduction='batchmean')   #does this work for other logits vectors such as from binary entropy or others?
         # optimizer = self.__optimizer
@@ -116,9 +111,7 @@ class ResponseDistiller:
                 batch_iterator = self.__trainloader
 
             for train_batch_idx, (X_train, y_train) in enumerate(batch_iterator):
-                X_train, y_train = X_train.to(self.__device), y_train.to(self.__device)
-
-                
+                X_train, y_train = X_train.to(self.__device), y_train.to(self.__device)               
 
                 with inference_mode():
                     teacher_logits = self.__teacher(X_train)
@@ -190,9 +183,6 @@ class ResponseDistiller:
             running_acc = 0
             running_loss = 0
 
-            #TODO Decide on the loss function pass method
-            # loss_fn = CrossEntropyLoss() 
-
             self.__student.eval()
 
             with inference_mode():
@@ -232,8 +222,6 @@ class ResponseDistiller:
         self.__train_progress['distillation_loss'].append(distill_loss)
         self.__train_progress['final_loss'].append(final_loss)
         self.__train_progress['timestamp'].append(time.time())
-        
-
 
 
     def __record_validation_step(self, epoch, loss, accuracy,):
@@ -244,14 +232,9 @@ class ResponseDistiller:
 
 
     def get_train_progress(self):
-        # print(self.__train_progess)
-        # import pandas as pd
-        # df = pd.DataFrame(self.__train_progess)
-        # print(df)
         return self.__train_progress
     
     def get_validation_progress(self):
-        # print(self.__validation_progress)
         return self.__validation_progress
 
 
@@ -276,11 +259,3 @@ class ResponseDistiller:
 
         FILEPATH = dir + "/" + filename + ext
         save_dict(self.__model.state_dict(), FILEPATH)
-
-
-    def __start_timer(self):
-        self.__start_time = time.time()
-
-    def __stop_timer(self):
-        self.__end_time = time.time()
-        return self.__end_time - self.__start_time
