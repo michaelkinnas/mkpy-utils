@@ -7,6 +7,7 @@ from torch.utils.data import Subset
 from torch import hub
 from trainer import Trainer
 
+
 # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 transforms_cifar = (transforms.Compose([
@@ -32,7 +33,10 @@ model = hub.load("chenyaofo/pytorch-cifar-models", model='cifar10_repvgg_a2', pr
 loss_fn = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr = 0.001)
 
-trainer = Trainer(model, optimizer, loss_fn, train_loader, test_loader, epochs=2, seed=1000)
+trainer = Trainer(model, optimizer, loss_fn, train_loader, test_loader, epochs=1, seed=1000)
 trainer.train_model(record_train_progress=True, use_tqdm=False)
+trainer.save_model_dictionary(filepath='./vgg19_bn.pth', append_accuracy=False)
 
-print(trainer.get_train_progress())
+
+df = pd.DataFrame(trainer.get_train_progress())
+df.to_csv('./train_progress.csv', index=False)

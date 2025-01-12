@@ -10,14 +10,14 @@ import os
 
 
 class ResponseDistiller:
-    def __init__(self, teacher, student, optimizer, loss_fn, train_dataloader, validation_dataloader = None, lr_scheduler=None,
-                 epochs: int=2, alpha=0.2, soft_loss_temp = 1, final_loss_temp = 1, device='auto', seed=None, validation_step: int=1, checkpoint_step: int=0):
+    def __init__(self, teacher, student, optimizer, loss_fn, train_dataloader, validation_dataloader=None, lr_scheduler=None,
+                 epochs: int=2, alpha: float=0.8, temperature: float=1, device='auto', seed=None, validation_step: int=1, checkpoint_step: int=0):
         """
         A training loop for the Response Based Distillation method
         """
         self.__teacher = teacher
         self.__student = student
-        
+
         self.__trainloader = train_dataloader
         self.__optimizer = optimizer  #for student
         self.__scheduler = lr_scheduler #for student
@@ -25,8 +25,8 @@ class ResponseDistiller:
         self.__epochs = epochs
 
         self.__alpha = alpha #the weights given to the final loss function hard targetrs and soft targets coefficients
-        self.__soft_loss_temp = soft_loss_temp #the temperature to soften the soft target vector values
-        self.__final_loss_temp = final_loss_temp
+        self.__temperature = temperature #the temperature to soften the soft target vector values
+        # self.__final_loss_temp = final_loss_temp
 
         if device == 'auto':
             self.__device = 'cuda' if cuda.is_available() else 'cpu'
@@ -47,7 +47,7 @@ class ResponseDistiller:
                 'final_loss':[],
                 'timestamp':[]
             }
-        
+
         self.__validation_progress = {
                 'epoch':[],
                 'val_acc': [],
@@ -72,10 +72,9 @@ class ResponseDistiller:
         self.__student.to(self.__device)
 
 
-    
+
     def distill(self, record_train_progress=False, record_validation_progress=False, window: int = 20, use_tqdm=True):
-        # hard_target_loss_fn = CrossEntropyLoss()                 #in case of multiclass classification
-        distillation_loss_fn = KLDivLoss(reduction='batchmean')   #does this work for other logits vectors such as from binary entropy or others?
+        soft_loss = KLDivLoss(reduction='batchmean')
         # optimizer = self.__optimizer
 
         TRAIN_NUM_BATCHES = len(self.__trainloader)
@@ -111,7 +110,7 @@ class ResponseDistiller:
                 batch_iterator = self.__trainloader
 
             for train_batch_idx, (X_train, y_train) in enumerate(batch_iterator):
-                X_train, y_train = X_train.to(self.__device), y_train.to(self.__device)               
+                X_train, y_train = X_train.to(self.__device), y_train.to(self.__device)
 
                 with inference_mode():
                     teacher_logits = self.__teacher(X_train)
@@ -119,43 +118,44 @@ class ResponseDistiller:
                 student_logits = self.__student(X_train)
 
                 #needs logSoftmax for teacher logits since the kldivloss function requires the log value for the first input
-                teacher_probs = log_softmax(teacher_logits / self.__soft_loss_temp, dim = 1)
-                student_probs = softmax(student_logits / self.__soft_loss_temp, dim = 1)
+                teacher_probs = log_softmax(teacher_logits / self.__temperature, dim = 1)
+                student_probs = softmax(student_logits / self.__temperature, dim = 1)
 
-                hard_target_loss = self.__loss_fn(student_logits, y_train)
-                distillation_loss = distillation_loss_fn(teacher_probs, student_probs)
-                
+                L_hard = self.__loss_fn(student_logits, y_train)
 
-                loss = self.__final_loss(hard_target_loss, distillation_loss)
+                # Multiplying by T^2 is suggested in the paper https://arxiv.org/abs/1503.02531
+                # The scaling factor accounts for the gradient scaling introduced by the temperature above
+                L_soft = soft_loss(student_probs, teacher_probs) * self.__temperature ** 2
 
-                loss.backward()
+                L_final = self.__final_loss(L_soft, L_hard)
 
+                L_final.backward()
                 self.__optimizer.step()
                 self.__optimizer.zero_grad()
 
-                running_loss += loss.item()
+                running_loss += L_final.item()
 
                 # Report train progress to tqdm
                 if use_tqdm:
-                    batch_iterator.set_postfix_str(f"Hard target loss: {hard_target_loss:.4f}, Distillation loss loss: {distillation_loss:.4f}, Final loss: {loss:.4f}")
+                    batch_iterator.set_postfix_str(f"Hard target loss: {L_hard:.4f}, Distillation loss loss: {L_soft:.4f}, Final loss: {L_final:.4f}")
                 else:
                     if train_batch_idx % int(len(self.__trainloader) * 0.10) == 0:
-                        print(f"Epoch [{epoch+1} / {self.__epochs}], Batch [{train_batch_idx+1} / {len(self.__trainloader)}], Hard target loss: {hard_target_loss:.4f}, Distillation loss loss: {distillation_loss:.4f}, Final loss: {loss:.4f}")
-                
+                        print(f"Epoch [{epoch+1} / {self.__epochs}], Batch [{train_batch_idx+1} / {len(self.__trainloader)}], Hard target loss: {L_hard:.4f}, Distillation loss loss: {L_soft:.4f}, Final loss: {L_final:.4f}")
+
                 accuracy = (argmax(student_logits, dim=1) == y_train).sum().item()
 
                 # TODO reporting
                 if record_train_progress:
-                    self.__record_training_step(epoch, train_batch_idx, 
-                                                loss=hard_target_loss.item(), 
-                                                distill_loss=distillation_loss.item(), 
-                                                final_loss=loss.item(),
+                    self.__record_training_step(epoch, train_batch_idx,
+                                                loss=L_hard.item(),
+                                                distill_loss=L_soft.item(),
+                                                final_loss=L_final.item(),
                                                 accuracy = accuracy / len(y_train))
-              
+
 
             # Save snapshot
             if self.__checkpoint_step > 0 and self.__checkpoint_step % epoch+1 == 0:
-                self.save_model_dictionary(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)                
+                self.save_model_weights(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)
 
             if self.__valloader:
                 running_loss, running_acc = self.__validation(epoch, record_validation_progress, use_tqdm=use_tqdm)
@@ -174,8 +174,9 @@ class ResponseDistiller:
                 self.__scheduler.step()
 
 
-    def __final_loss(self, hard_target_loss, distillation_loss):
-        return self.__alpha * hard_target_loss + (1 - self.__alpha) * distillation_loss * self.__final_loss_temp**2
+
+    def __final_loss(self, L_soft, L_hard):
+        return self.__alpha * L_soft + (1 - self.__alpha) * L_hard
 
 
     def __validation(self, epoch, record_validation_progress, use_tqdm=True):
@@ -208,9 +209,9 @@ class ResponseDistiller:
                     accuracy = (argmax(y_pred_test, dim=1) == y_test).sum().item() / len(y_test)
                     running_acc += accuracy
 
-                    if record_validation_progress: 
+                    if record_validation_progress:
                         self.__record_validation_step(loss, accuracy, epoch)
-            
+
             return running_loss, running_acc
 
 
@@ -233,7 +234,7 @@ class ResponseDistiller:
 
     def get_train_progress(self):
         return self.__train_progress
-    
+
     def get_validation_progress(self):
         return self.__validation_progress
 
@@ -245,7 +246,7 @@ class ResponseDistiller:
     #         writer.writerows(zip(*self.__train_progess.values()))
 
 
-    def save_model_dictionary(self, filepath, append_accuracy=False):
+    def save_model_weights(self, filepath, append_accuracy=False):
         dir = os.path.dirname(filepath)
         filename, ext = os.path.splitext(os.path.basename(filepath))
 

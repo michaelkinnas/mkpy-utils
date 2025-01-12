@@ -172,12 +172,12 @@ class Trainer:
             with inference_mode():
                 
                 if use_tqdm:
-                    vallidation_batch_iterator = tqdm(self.__valloader, total=len(self.__valloader), desc="Validation: ", leave=False, position=2)
+                    validation_batch_iterator = tqdm(self.__valloader, total=len(self.__valloader), desc="Validation: ", leave=False, position=2)
                 else:
-                    vallidation_batch_iterator = self.__valloader
+                    validation_batch_iterator = self.__valloader
                     print("Running validation...")
 
-                for val_batch_idx, (X_test, y_test) in enumerate(vallidation_batch_iterator):
+                for val_batch_idx, (X_test, y_test) in enumerate(validation_batch_iterator):
                     X_test, y_test = X_test.to(self.__device), y_test.to(self.__device)
 
                     y_pred_test = self.__model(X_test)
