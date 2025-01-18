@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="mkpy-utils",
+    name="mkpyutils",
     version="0.2",
     packages=find_packages(),
     install_requires=['torch>=2.0.0', 'tqdm>=4.67.0'],
@@ -17,4 +17,5 @@ setup(
         "Operating System :: OS Independent",
     ],
     python_requires='>=3.10',
+    license = "MIT"
 )
