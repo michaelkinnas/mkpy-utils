@@ -4,6 +4,10 @@ __pycache__/
 *$py.class
 data/
 
+train_test.py
+models.py
+distill_test.py
+
 # C extensions
 *.so
 

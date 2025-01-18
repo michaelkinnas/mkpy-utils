@@ -10,10 +10,28 @@ import os
 
 
 class ResponseDistiller:
-    def __init__(self, teacher, student, optimizer, loss_fn, train_dataloader, validation_dataloader=None, lr_scheduler=None,
+    def __init__(self, teacher, student, loss_fn, optimizer,  train_dataloader, validation_dataloader=None, lr_scheduler=None,
                  epochs: int=2, alpha: float=0.8, temperature: float=1, device='auto', seed=None, validation_step: int=1, checkpoint_step: int=0):
         """
-        A training loop for the Response Based Distillation method
+        A training loop for the Response Based Distillation method. It receives a teacher and student neural network model and performs
+        the knowledge distillation.
+
+        Args:
+            teacher (nn module): The trained neural network teacher model.
+            student (nn modeul): The untrained neural network student model.
+            loss_fn (loss): A loss function that will be used for the hard target loss calculatin of the student.
+            optimizer (optim): An optimizer function.
+            train_dataloader (Dataloader): A dataloader containing the training dataset.
+            validation_dataloader (Dataloader, optional): A dataLoader containing the validation dataset, for testing accuracy
+                after every training epoch. If no validation dataloader is provided the testing will be skipped. (default: ``None``)
+            lr_scheduler (optim): A learning rate scheduler function (optional)
+            epochs (int): The number of epochs for the model to be trained. (default: ``1``).
+            alpha (float): The alpha parameter of the final loss calculation. Higher values favor the soft target loss moew, the student's hard target loss less and vice versa. (default: ``0.8``)
+            temperature (float): The temperature that will be used to soften the probability distributions of both models. (default: ``1``).
+            device (str): The device to be trained on (default: ``AUTO``).
+            seed (str): A seed for initializing model parameters. (default: ``None``).
+            validation_step (int): Report training (and validation, if valloader is not None) accuracy and loss after every number of epochs (default: ``1``).
+            checkpoint_step (int): Save model weights every ``step`` epochs, if set to greater than 0.
         """
         self.__teacher = teacher
         self.__student = student
@@ -45,7 +63,7 @@ class ResponseDistiller:
                 'train_loss': [],
                 'distillation_loss':[],
                 'final_loss':[],
-                'timestamp':[]
+                'timestamp':[],
             }
 
         self.__validation_progress = {
@@ -84,7 +102,6 @@ class ResponseDistiller:
             VAL_NUM_BATCHES = len(self.__valloader)
             VAL_BATCH_SIZE = self.__valloader.batch_size
 
-        # self.__start_timer()
 
         if use_tqdm:
             epoch_iterator = tqdm(range(self.__epochs), desc='Epoch: ', leave=False, position=0)
@@ -94,8 +111,6 @@ class ResponseDistiller:
         for epoch in epoch_iterator:
             running_loss = 0
             running_acc = 0
-
-            # batch_accuracies = []
 
             self.__student.train()
 
@@ -118,14 +133,13 @@ class ResponseDistiller:
                 student_logits = self.__student(X_train)
 
                 #needs logSoftmax for teacher logits since the kldivloss function requires the log value for the first input
-                teacher_probs = log_softmax(teacher_logits / self.__temperature, dim = 1)
-                student_probs = softmax(student_logits / self.__temperature, dim = 1)
-
-                L_hard = self.__loss_fn(student_logits, y_train)
+                student_probs = log_softmax(student_logits / self.__temperature, dim = 1)
+                teacher_probs = softmax(teacher_logits / self.__temperature, dim = 1)
 
                 # Multiplying by T^2 is suggested in the paper https://arxiv.org/abs/1503.02531
                 # The scaling factor accounts for the gradient scaling introduced by the temperature above
                 L_soft = soft_loss(student_probs, teacher_probs) * self.__temperature ** 2
+                L_hard = self.__loss_fn(student_logits, y_train)
 
                 L_final = self.__final_loss(L_soft, L_hard)
 
@@ -137,10 +151,10 @@ class ResponseDistiller:
 
                 # Report train progress to tqdm
                 if use_tqdm:
-                    batch_iterator.set_postfix_str(f"Hard target loss: {L_hard:.4f}, Distillation loss loss: {L_soft:.4f}, Final loss: {L_final:.4f}")
+                    batch_iterator.set_postfix_str(f"Soft target loss: {L_soft:.4f}, Hard target loss: {L_hard:.4f}, Final loss: {L_final:.4f}, LR: {lr}")
                 else:
                     if train_batch_idx % int(len(self.__trainloader) * 0.10) == 0:
-                        print(f"Epoch [{epoch+1} / {self.__epochs}], Batch [{train_batch_idx+1} / {len(self.__trainloader)}], Hard target loss: {L_hard:.4f}, Distillation loss loss: {L_soft:.4f}, Final loss: {L_final:.4f}")
+                        print(f"Epoch [{epoch+1} / {self.__epochs}], Batch [{train_batch_idx+1} / {len(self.__trainloader)}], Soft target loss: {L_soft:.4f}, Hard target loss: {L_hard:.4f}, Final loss: {L_final:.4f}, LR: {lr}")
 
                 accuracy = (argmax(student_logits, dim=1) == y_train).sum().item()
 
@@ -152,13 +166,13 @@ class ResponseDistiller:
                                                 final_loss=L_final.item(),
                                                 accuracy = accuracy / len(y_train))
 
-
             # Save snapshot
             if self.__checkpoint_step > 0 and self.__checkpoint_step % epoch+1 == 0:
                 self.save_model_weights(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)
 
             if self.__valloader:
                 running_loss, running_acc = self.__validation(epoch, record_validation_progress, use_tqdm=use_tqdm)
+
                 if use_tqdm:
                     epoch_iterator.set_postfix_str(f"Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
                 else:
@@ -167,12 +181,10 @@ class ResponseDistiller:
                 if use_tqdm:
                     epoch_iterator.set_postfix_str(f"Previous epoch: Training loss: {running_loss / (train_batch_idx+1):.4f} | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
                 else:
-                    # if train_batch_idx % int(len(self.__trainloader) * 0.10) == 0:
                     print(f"  => Epoch [{epoch+1} / {self.__epochs}], Previous epoch: Training loss: {running_loss / (train_batch_idx+1):.4f} | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
 
             if self.__scheduler:
                 self.__scheduler.step()
-
 
 
     def __final_loss(self, L_soft, L_hard):
@@ -209,8 +221,8 @@ class ResponseDistiller:
                     accuracy = (argmax(y_pred_test, dim=1) == y_test).sum().item() / len(y_test)
                     running_acc += accuracy
 
-                    if record_validation_progress:
-                        self.__record_validation_step(loss, accuracy, epoch)
+                if record_validation_progress:
+                    self.__record_validation_step(epoch, loss, accuracy)
 
             return running_loss, running_acc
 
@@ -237,14 +249,6 @@ class ResponseDistiller:
 
     def get_validation_progress(self):
         return self.__validation_progress
-
-
-    # def save_train_progress(self, filepath):
-    #     with open(filepath, 'w') as csvfile:
-    #         writer = csv.writer(csvfile)
-    #         writer.writerow(self.__train_progess.keys())
-    #         writer.writerows(zip(*self.__train_progess.values()))
-
 
     def save_model_weights(self, filepath, append_accuracy=False):
         dir = os.path.dirname(filepath)
