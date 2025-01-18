@@ -193,8 +193,8 @@ class Trainer:
                     accuracy = (argmax(y_pred_test, dim=1) == y_test).sum().item() / len(y_test)
                     running_acc += accuracy
 
-                    if record_validation_progress: 
-                        self.__record_validation_step(loss, accuracy, epoch)
+                if record_validation_progress: 
+                    self.__record_validation_step(loss, accuracy, epoch)
             
             return running_loss, running_acc
 

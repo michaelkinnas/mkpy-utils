@@ -1,10 +1,8 @@
-# import torch
 from torch.nn import KLDivLoss
 from torch.nn.functional import softmax, log_softmax
 from torch import save as save_dict
-from torch import manual_seed, inference_mode, argmax, cuda, backends, use_deterministic_algorithms
+from torch import manual_seed, inference_mode, argmax, cuda, backends
 from tqdm.auto import tqdm
-# import csv
 import time
 import os
 
@@ -35,7 +33,7 @@ class ResponseDistiller:
         """
         self.__teacher = teacher
         self.__student = student
-
+        
         self.__trainloader = train_dataloader
         self.__optimizer = optimizer  #for student
         self.__scheduler = lr_scheduler #for student
@@ -65,7 +63,7 @@ class ResponseDistiller:
                 'final_loss':[],
                 'timestamp':[],
             }
-
+        
         self.__validation_progress = {
                 'epoch':[],
                 'val_acc': [],
@@ -90,8 +88,8 @@ class ResponseDistiller:
         self.__student.to(self.__device)
 
 
-
-    def distill(self, record_train_progress=False, record_validation_progress=False, window: int = 20, use_tqdm=True):
+    
+    def distill(self, record_train_progress=False, record_validation_progress=False, verbose=True, window: int=20, use_tqdm=True, batch_reporting_step=1):
         soft_loss = KLDivLoss(reduction='batchmean')
         # optimizer = self.__optimizer
 
@@ -125,7 +123,7 @@ class ResponseDistiller:
                 batch_iterator = self.__trainloader
 
             for train_batch_idx, (X_train, y_train) in enumerate(batch_iterator):
-                X_train, y_train = X_train.to(self.__device), y_train.to(self.__device)
+                X_train, y_train = X_train.to(self.__device), y_train.to(self.__device)               
 
                 with inference_mode():
                     teacher_logits = self.__teacher(X_train)
@@ -134,8 +132,8 @@ class ResponseDistiller:
 
                 #needs logSoftmax for teacher logits since the kldivloss function requires the log value for the first input
                 student_probs = log_softmax(student_logits / self.__temperature, dim = 1)
-                teacher_probs = softmax(teacher_logits / self.__temperature, dim = 1)
-
+                teacher_probs = softmax(teacher_logits / self.__temperature, dim = 1)                
+                
                 # Multiplying by T^2 is suggested in the paper https://arxiv.org/abs/1503.02531
                 # The scaling factor accounts for the gradient scaling introduced by the temperature above
                 L_soft = soft_loss(student_probs, teacher_probs) * self.__temperature ** 2
@@ -150,43 +148,48 @@ class ResponseDistiller:
                 running_loss += L_final.item()
 
                 # Report train progress to tqdm
-                if use_tqdm:
-                    batch_iterator.set_postfix_str(f"Soft target loss: {L_soft:.4f}, Hard target loss: {L_hard:.4f}, Final loss: {L_final:.4f}, LR: {lr}")
-                else:
-                    if train_batch_idx % int(len(self.__trainloader) * 0.10) == 0:
-                        print(f"Epoch [{epoch+1} / {self.__epochs}], Batch [{train_batch_idx+1} / {len(self.__trainloader)}], Soft target loss: {L_soft:.4f}, Hard target loss: {L_hard:.4f}, Final loss: {L_final:.4f}, LR: {lr}")
-
+                if verbose:
+                    if use_tqdm:
+                        batch_iterator.set_postfix_str(f"Soft target loss: {L_soft:.4f}, Hard target loss: {L_hard:.4f}, Final loss: {L_final:.4f}, LR: {lr}")
+                    else:
+                        if train_batch_idx % int(len(self.__trainloader) * 0.10) == 0:
+                            print(f"Epoch [{epoch+1} / {self.__epochs}], Batch [{train_batch_idx+1} / {len(self.__trainloader)}], Soft target loss: {L_soft:.4f}, Hard target loss: {L_hard:.4f}, Final loss: {L_final:.4f}, LR: {lr}")
+                
                 accuracy = (argmax(student_logits, dim=1) == y_train).sum().item()
 
                 # TODO reporting
                 if record_train_progress:
-                    self.__record_training_step(epoch, train_batch_idx,
-                                                loss=L_hard.item(),
-                                                distill_loss=L_soft.item(),
+                    self.__record_training_step(epoch, train_batch_idx, 
+                                                loss=L_hard.item(), 
+                                                distill_loss=L_soft.item(), 
                                                 final_loss=L_final.item(),
-                                                accuracy = accuracy / len(y_train))
+                                                accuracy = accuracy / len(y_train))             
 
             # Save snapshot
             if self.__checkpoint_step > 0 and self.__checkpoint_step % epoch+1 == 0:
-                self.save_model_weights(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)
+                self.save_model_weights(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)                
 
             if self.__valloader:
-                running_loss, running_acc = self.__validation(epoch, record_validation_progress, use_tqdm=use_tqdm)
+                running_loss, running_acc = self.__validation(epoch=epoch, 
+                                                              record_validation_progress=record_validation_progress, 
+                                                              use_tqdm=use_tqdm, 
+                                                              verbose=verbose)
 
-                if use_tqdm:
-                    epoch_iterator.set_postfix_str(f"Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
+                if verbose:
+                    if use_tqdm:
+                        epoch_iterator.set_postfix_str(f"Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
+                    else:
+                        print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
                 else:
-                    print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
-            else:
-                if use_tqdm:
-                    epoch_iterator.set_postfix_str(f"Previous epoch: Training loss: {running_loss / (train_batch_idx+1):.4f} | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
-                else:
-                    print(f"  => Epoch [{epoch+1} / {self.__epochs}], Previous epoch: Training loss: {running_loss / (train_batch_idx+1):.4f} | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
+                    if use_tqdm:
+                        epoch_iterator.set_postfix_str(f"Previous epoch: Training loss: {running_loss / (train_batch_idx+1):.4f} | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
+                    else:
+                        print(f"  => Epoch [{epoch+1} / {self.__epochs}], Previous epoch: Training loss: {running_loss / (train_batch_idx+1):.4f} | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
 
             if self.__scheduler:
                 self.__scheduler.step()
-
-
+    
+    
     def __final_loss(self, L_soft, L_hard):
         return self.__alpha * L_soft + (1 - self.__alpha) * L_hard
 
@@ -203,7 +206,6 @@ class ResponseDistiller:
                     vallidation_batch_iterator = tqdm(self.__valloader, total=len(self.__valloader), desc="Validation: ", leave=False, position=2)
                 else:
                     vallidation_batch_iterator = self.__valloader
-                    print("Running validation...")
 
                 for val_batch_idx, (X_test, y_test) in enumerate(vallidation_batch_iterator):
                     X_test, y_test = X_test.to(self.__device), y_test.to(self.__device)
@@ -221,9 +223,9 @@ class ResponseDistiller:
                     accuracy = (argmax(y_pred_test, dim=1) == y_test).sum().item() / len(y_test)
                     running_acc += accuracy
 
-                if record_validation_progress:
+                if record_validation_progress: 
                     self.__record_validation_step(epoch, loss, accuracy)
-
+            
             return running_loss, running_acc
 
 
@@ -246,7 +248,7 @@ class ResponseDistiller:
 
     def get_train_progress(self):
         return self.__train_progress
-
+    
     def get_validation_progress(self):
         return self.__validation_progress
 
