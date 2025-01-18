@@ -86,10 +86,17 @@ class ResponseDistiller:
 
         self.__teacher.to(self.__device)
         self.__student.to(self.__device)
-
+        print("aaaaa")
 
     
-    def distill(self, record_train_progress=False, record_validation_progress=False, verbose=True, window: int=20, use_tqdm=True, batch_reporting_step=1):
+    def distill(self, 
+                record_train_progress=False, 
+                record_validation_progress=False, 
+                verbose=True, 
+                window: int=20, 
+                use_tqdm=True, 
+                batch_reporting_step=1):
+        
         soft_loss = KLDivLoss(reduction='batchmean')
         # optimizer = self.__optimizer
 
@@ -152,14 +159,15 @@ class ResponseDistiller:
                     if use_tqdm:
                         batch_iterator.set_postfix_str(f"Soft target loss: {L_soft:.4f}, Hard target loss: {L_hard:.4f}, Final loss: {L_final:.4f}, LR: {lr}")
                     else:
-                        if train_batch_idx % int(len(self.__trainloader) * 0.10) == 0:
+                        if train_batch_idx % batch_reporting_step == 0:
                             print(f"Epoch [{epoch+1} / {self.__epochs}], Batch [{train_batch_idx+1} / {len(self.__trainloader)}], Soft target loss: {L_soft:.4f}, Hard target loss: {L_hard:.4f}, Final loss: {L_final:.4f}, LR: {lr}")
                 
                 accuracy = (argmax(student_logits, dim=1) == y_train).sum().item()
 
                 # TODO reporting
                 if record_train_progress:
-                    self.__record_training_step(epoch, train_batch_idx, 
+                    self.__record_training_step(epoch=epoch, 
+                                                batch=train_batch_idx, 
                                                 loss=L_hard.item(), 
                                                 distill_loss=L_soft.item(), 
                                                 final_loss=L_final.item(),
@@ -172,15 +180,15 @@ class ResponseDistiller:
             if self.__valloader:
                 running_loss, running_acc = self.__validation(epoch=epoch, 
                                                               record_validation_progress=record_validation_progress, 
-                                                              use_tqdm=use_tqdm, 
-                                                              verbose=verbose)
-
+                                                              use_tqdm=use_tqdm)
                 if verbose:
                     if use_tqdm:
                         epoch_iterator.set_postfix_str(f"Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
                     else:
                         print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
-                else:
+            
+            else:
+                if verbose:
                     if use_tqdm:
                         epoch_iterator.set_postfix_str(f"Previous epoch: Training loss: {running_loss / (train_batch_idx+1):.4f} | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
                     else:
@@ -231,9 +239,9 @@ class ResponseDistiller:
 
     def __record_training_step(self, epoch, batch, loss, distill_loss, final_loss, accuracy):
         self.__train_progress['epoch'].append(epoch)
-        self.__train_progress['batch'].append(batch)
-        self.__train_progress['train_acc'].append(accuracy)
+        self.__train_progress['batch'].append(batch)        
         self.__train_progress['train_loss'].append(loss)
+        self.__train_progress['train_acc'].append(accuracy)
         self.__train_progress['distillation_loss'].append(distill_loss)
         self.__train_progress['final_loss'].append(final_loss)
         self.__train_progress['timestamp'].append(time.time())
