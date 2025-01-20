@@ -174,6 +174,14 @@ class Trainer:
 
             if self.__scheduler:
                 self.__scheduler.step()
+        
+        
+        if self.__valloader and not verbose:
+            running_loss, running_acc = self.__validation(epoch=epoch, 
+                                                            record_validation_progress=False, 
+                                                            use_tqdm=False)
+        
+            print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
 
 
     def __validation(self, epoch, record_validation_progress, use_tqdm):

@@ -195,7 +195,14 @@ class ResponseDistiller:
 
             if self.__scheduler:
                 self.__scheduler.step()
-    
+        
+        # If verbose is not selected. Pefrom a one time test inference at the end of training and report
+        if self.__valloader and not verbose:
+            running_loss, running_acc = self.__validation(epoch=epoch, 
+                                                            record_validation_progress=False, 
+                                                            use_tqdm=False)
+        
+            print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
     
     def __final_loss(self, L_soft, L_hard):
         return self.__alpha * L_soft + (1 - self.__alpha) * L_hard
