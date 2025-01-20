@@ -86,7 +86,6 @@ class ResponseDistiller:
 
         self.__teacher.to(self.__device)
         self.__student.to(self.__device)
-        print("aaaaa")
 
     
     def distill(self, 
