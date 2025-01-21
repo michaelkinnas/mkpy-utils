@@ -87,8 +87,5 @@ class INTEL(Dataset):
 
         if self.target_transform is not None:
             target = self.target_transform(target)
-
-        if self.return_numpy:
-            return img, target, self.images[idx][0] 
        
         return img, target
