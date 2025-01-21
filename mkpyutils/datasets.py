@@ -27,7 +27,7 @@ class TinyImageNet(Dataset):
         self.targets = [x[1] for x in images]
 
     def __len__(self):
-        return len(self.images)
+        return len(self.data)
     
     def __getitem__(self, idx):
         img, target = self.data[idx], self.targets[idx]
@@ -77,7 +77,7 @@ class INTEL(Dataset):
         self.targets = [x[1] for x in images]
 
     def __len__(self):
-        return len(self.images)
+        return len(self.data)
 
     def __getitem__(self, idx):      
         img, target = self.data[idx], self.targets[idx]
