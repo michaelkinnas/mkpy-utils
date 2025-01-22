@@ -70,6 +70,9 @@ class INTEL(Dataset):
             for image_file in image_files:
                 image_file_path = path.join(filepath, image_file)
                 image = Image.open(image_file_path)
+                w, h = image.size
+                if w != 150 or h != 150:
+                    image = image.resize((150, 150))
                 images.append((array(image), array(self.labels[label])))
 
         self.random.shuffle(images)        
