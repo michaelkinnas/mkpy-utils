@@ -3,6 +3,7 @@ from torch.nn.functional import softmax, log_softmax
 from torch import save as save_dict
 from torch import manual_seed, inference_mode, argmax, cuda, backends
 from tqdm.auto import tqdm
+from .helpers import report_distillation_train, report_distillation_validation
 import time
 import os
 
@@ -72,15 +73,13 @@ class ResponseDistiller:
                 'timestamp':[]
         }
 
-        # self.__model = self.__model.to(self.__device) #??
-
         if self.__seed is not None:
             manual_seed(self.__seed)
             if self.__device == 'cuda':
                 cuda.manual_seed(self.__seed)
                 backends.cudnn.deterministic = True
-                # When using CUDA >= 10.2 for reproducability you must use the folloing command
-                # however it requred some additional environment variables to be set
+                # When using CUDA >= 10.2 for reproducability you must use the following command
+                # however it requres some additional environment variables to be set
                 # https://docs.nvidia.com/cuda/cublas/index.html#results-reproducibility
                 # use_deterministic_algorithms(True)
                 backends.cudnn.benchmark = False
@@ -95,20 +94,12 @@ class ResponseDistiller:
                 verbose=True,
                 window: int=20,
                 use_tqdm=True,
-                batch_reporting_step=1):
+                batch_reporting_step=1,
+                ):
 
         soft_loss = KLDivLoss(reduction='batchmean')
-        # optimizer = self.__optimizer
 
-        TRAIN_NUM_BATCHES = len(self.__trainloader)
-        TRAIN_BATCH_SIZE = self.__trainloader.batch_size
-
-        if self.__valloader:
-            VAL_NUM_BATCHES = len(self.__valloader)
-            VAL_BATCH_SIZE = self.__valloader.batch_size
-
-
-        if use_tqdm:
+        if verbose and use_tqdm:
             epoch_iterator = tqdm(range(self.__epochs), desc='Epoch: ', leave=False, position=0)
         else:
             epoch_iterator = range(self.__epochs)
@@ -124,7 +115,7 @@ class ResponseDistiller:
             else:
                 lr = self.__optimizer.param_groups[-1]['lr']
 
-            if use_tqdm:
+            if verbose and use_tqdm:
                 batch_iterator = tqdm(self.__trainloader, total=len(self.__trainloader), desc="Batch: ", leave=False, position=1)
             else:
                 batch_iterator = self.__trainloader
@@ -154,17 +145,25 @@ class ResponseDistiller:
 
                 running_loss += L_final.item()
 
-                # Report train progress to tqdm
-                if verbose:
-                    if use_tqdm:
-                        batch_iterator.set_postfix_str(f"Soft target loss: {L_soft:.4f}, Hard target loss: {L_hard:.4f}, Final loss: {L_final:.4f}, LR: {lr}")
-                    else:
-                        if train_batch_idx % batch_reporting_step == 0:
-                            print(f"Epoch [{epoch+1} / {self.__epochs}], Batch [{train_batch_idx+1} / {len(self.__trainloader)}], Soft target loss: {L_soft:.4f}, Hard target loss: {L_hard:.4f}, Final loss: {L_final:.4f}, LR: {lr}")
-
                 accuracy = (argmax(student_logits, dim=1) == y_train).sum().item()
+                running_acc += accuracy
 
-                # TODO reporting
+                # Report train progress to tqdm
+                report_distillation_train(current_epoch=epoch,
+                                    total_epochs=self.__epochs,
+                                    current_batch=train_batch_idx,
+                                    total_batches=len(self.__trainloader),
+                                    soft_loss=L_soft,
+                                    hard_loss=L_hard,
+                                    final_loss=L_final,
+                                    learning_rate=lr,
+                                    student_acc=running_acc / (train_batch_idx * self.__trainloader.batch_size + len(y_train)) * 100,
+                                    verbose=verbose,
+                                    use_tqdm=use_tqdm,
+                                    reporting_step=batch_reporting_step,
+                                    tqdm_batch_iterator=batch_iterator)               
+
+
                 if record_train_progress:
                     self.__record_training_step(epoch=epoch,
                                                 batch=train_batch_idx,
@@ -174,38 +173,40 @@ class ResponseDistiller:
                                                 learning_rate=lr,
                                                 accuracy = accuracy / len(y_train))
 
-            # Save snapshot
+            # END OF EPOCH --------
+            # Save checkpoint
             if self.__checkpoint_step > 0 and self.__checkpoint_step % epoch+1 == 0:
                 self.save_model_weights(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)
 
-            if self.__valloader:
-                val_loss, val_acc = self.__validation(epoch=epoch,
-                                                    record_validation_progress=record_validation_progress,
-                                                    use_tqdm=use_tqdm)
-                if verbose:
-                    if use_tqdm:
-                        epoch_iterator.set_postfix_str(f"Validation loss: {val_loss:.4f} | Validation accuracy: {val_acc:.4f}%")
-                    else:
-                        print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {val_loss:.4f} | Validation accuracy: {val_acc * 100:.2f}%")
-
-            else:
-                if verbose:
-                    if use_tqdm:
-                        epoch_iterator.set_postfix_str(f"Previous epoch: Training loss: {running_loss / (train_batch_idx+1):.4f} | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
-                    else:
-                        print(f"  => Epoch [{epoch+1} / {self.__epochs}], Previous epoch: Training loss: {running_loss / (train_batch_idx+1):.4f} | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
+            
+            report_distillation_validation(validation_dataloader=self.__valloader,
+                                           validation_fn=self.__validation,
+                                           current_epoch=epoch,
+                                           total_epochs=self.__epochs,
+                                           current_batch=train_batch_idx,
+                                           train_batch_size=self.__trainloader.batch_size,
+                                           length_y=len(y_train),
+                                           record_validation_progress=record_validation_progress,
+                                           use_tqdm=use_tqdm,
+                                           verbose=verbose,
+                                           tqdm_epoch_iterator=epoch_iterator,
+                                           running_acc=running_acc,
+                                           running_loss=running_loss / len(y_train))
 
             if self.__scheduler:
                 self.__scheduler.step()
 
-        # If verbose is not selected. Pefrom a one time test inference at the end of training and report
+        # ENF OF TRAINING -----
+
+        # If verbose is not selected. Perform a one time test inference at the end of training and report
         if self.__valloader and not verbose:
             val_loss, val_acc = self.__validation(epoch=epoch,
-                                                            record_validation_progress=False,
-                                                            use_tqdm=False)
+                                                record_validation_progress=False,
+                                                use_tqdm=False)
 
             print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {val_loss:.4f} | Validation accuracy: {val_acc * 100:.2f}%")
 
+    
     def __final_loss(self, L_soft, L_hard):
         return self.__alpha * L_soft + (1 - self.__alpha) * L_hard
 
@@ -226,7 +227,7 @@ class ResponseDistiller:
                 else:
                     vallidation_batch_iterator = self.__valloader
 
-                for val_batch_idx, (X_test, y_test) in enumerate(vallidation_batch_iterator):
+                for X_test, y_test in vallidation_batch_iterator:
                     X_test, y_test = X_test.to(self.__device), y_test.to(self.__device)
 
                     y_pred_test = self.__student(X_test)
