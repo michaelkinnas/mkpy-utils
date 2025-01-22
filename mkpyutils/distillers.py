@@ -33,7 +33,7 @@ class ResponseDistiller:
         """
         self.__teacher = teacher
         self.__student = student
-        
+
         self.__trainloader = train_dataloader
         self.__optimizer = optimizer  #for student
         self.__scheduler = lr_scheduler #for student
@@ -57,17 +57,18 @@ class ResponseDistiller:
         self.__train_progress = {
                 'epoch':[],
                 'batch':[],
-                'train_acc' : [],
-                'train_loss': [],
-                'distillation_loss':[],
+                'acc' : [],
+                'hard_loss': [],
+                'soft_loss':[],
                 'final_loss':[],
+                'learning_rate':[],
                 'timestamp':[],
             }
-        
+
         self.__validation_progress = {
                 'epoch':[],
-                'val_acc': [],
-                'val_loss': [],
+                'acc': [],
+                'loss': [],
                 'timestamp':[]
         }
 
@@ -87,15 +88,15 @@ class ResponseDistiller:
         self.__teacher.to(self.__device)
         self.__student.to(self.__device)
 
-    
-    def distill(self, 
-                record_train_progress=False, 
-                record_validation_progress=False, 
-                verbose=True, 
-                window: int=20, 
-                use_tqdm=True, 
+
+    def distill(self,
+                record_train_progress=False,
+                record_validation_progress=False,
+                verbose=True,
+                window: int=20,
+                use_tqdm=True,
                 batch_reporting_step=1):
-        
+
         soft_loss = KLDivLoss(reduction='batchmean')
         # optimizer = self.__optimizer
 
@@ -129,7 +130,7 @@ class ResponseDistiller:
                 batch_iterator = self.__trainloader
 
             for train_batch_idx, (X_train, y_train) in enumerate(batch_iterator):
-                X_train, y_train = X_train.to(self.__device), y_train.to(self.__device)               
+                X_train, y_train = X_train.to(self.__device), y_train.to(self.__device)
 
                 with inference_mode():
                     teacher_logits = self.__teacher(X_train)
@@ -138,8 +139,8 @@ class ResponseDistiller:
 
                 #needs logSoftmax for teacher logits since the kldivloss function requires the log value for the first input
                 student_probs = log_softmax(student_logits / self.__temperature, dim = 1)
-                teacher_probs = softmax(teacher_logits / self.__temperature, dim = 1)                
-                
+                teacher_probs = softmax(teacher_logits / self.__temperature, dim = 1)
+
                 # Multiplying by T^2 is suggested in the paper https://arxiv.org/abs/1503.02531
                 # The scaling factor accounts for the gradient scaling introduced by the temperature above
                 L_soft = soft_loss(student_probs, teacher_probs) * self.__temperature ** 2
@@ -160,32 +161,33 @@ class ResponseDistiller:
                     else:
                         if train_batch_idx % batch_reporting_step == 0:
                             print(f"Epoch [{epoch+1} / {self.__epochs}], Batch [{train_batch_idx+1} / {len(self.__trainloader)}], Soft target loss: {L_soft:.4f}, Hard target loss: {L_hard:.4f}, Final loss: {L_final:.4f}, LR: {lr}")
-                
+
                 accuracy = (argmax(student_logits, dim=1) == y_train).sum().item()
 
                 # TODO reporting
                 if record_train_progress:
-                    self.__record_training_step(epoch=epoch, 
-                                                batch=train_batch_idx, 
-                                                loss=L_hard.item(), 
-                                                distill_loss=L_soft.item(), 
+                    self.__record_training_step(epoch=epoch,
+                                                batch=train_batch_idx,
+                                                hard_loss=L_hard.item(),
+                                                soft_loss=L_soft.item(),
                                                 final_loss=L_final.item(),
-                                                accuracy = accuracy / len(y_train))             
+                                                learning_rate=lr,
+                                                accuracy = accuracy / len(y_train))
 
             # Save snapshot
             if self.__checkpoint_step > 0 and self.__checkpoint_step % epoch+1 == 0:
-                self.save_model_weights(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)                
+                self.save_model_weights(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)
 
             if self.__valloader:
-                running_loss, running_acc = self.__validation(epoch=epoch, 
-                                                              record_validation_progress=record_validation_progress, 
-                                                              use_tqdm=use_tqdm)
+                val_loss, val_acc = self.__validation(epoch=epoch,
+                                                    record_validation_progress=record_validation_progress,
+                                                    use_tqdm=use_tqdm)
                 if verbose:
                     if use_tqdm:
-                        epoch_iterator.set_postfix_str(f"Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
+                        epoch_iterator.set_postfix_str(f"Validation loss: {val_loss:.4f} | Validation accuracy: {val_acc:.4f}%")
                     else:
-                        print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
-            
+                        print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {val_loss:.4f} | Validation accuracy: {val_acc * 100:.2f}%")
+
             else:
                 if verbose:
                     if use_tqdm:
@@ -195,15 +197,15 @@ class ResponseDistiller:
 
             if self.__scheduler:
                 self.__scheduler.step()
-        
+
         # If verbose is not selected. Pefrom a one time test inference at the end of training and report
         if self.__valloader and not verbose:
-            running_loss, running_acc = self.__validation(epoch=epoch, 
-                                                            record_validation_progress=False, 
+            val_loss, val_acc = self.__validation(epoch=epoch,
+                                                            record_validation_progress=False,
                                                             use_tqdm=False)
-        
-            print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
-    
+
+            print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {val_loss:.4f} | Validation accuracy: {val_acc * 100:.2f}%")
+
     def __final_loss(self, L_soft, L_hard):
         return self.__alpha * L_soft + (1 - self.__alpha) * L_hard
 
@@ -212,6 +214,9 @@ class ResponseDistiller:
         if epoch % self.__validation_step == 0 or epoch == self.__epochs-1:
             running_acc = 0
             running_loss = 0
+
+            correct = 0
+            total = 0
 
             self.__student.eval()
 
@@ -234,35 +239,36 @@ class ResponseDistiller:
                     loss = val_loss.item()
                     running_loss += loss
 
-                    accuracy = (argmax(y_pred_test, dim=1) == y_test).sum().item() / len(y_test)
-                    running_acc += accuracy
+                    correct += (argmax(y_pred_test, dim=1) == y_test).sum().item()
+                    total += len(y_test)
 
-                if record_validation_progress: 
-                    self.__record_validation_step(epoch, loss, accuracy)
-            
-            return running_loss, running_acc
+                if record_validation_progress:
+                    self.__record_validation_step(epoch, loss, correct / total)
+
+            return loss, correct / total
 
 
-    def __record_training_step(self, epoch, batch, loss, distill_loss, final_loss, accuracy):
+    def __record_training_step(self, epoch, batch, hard_loss, soft_loss, final_loss, learning_rate, accuracy):
         self.__train_progress['epoch'].append(epoch)
-        self.__train_progress['batch'].append(batch)        
-        self.__train_progress['train_loss'].append(loss)
-        self.__train_progress['train_acc'].append(accuracy)
-        self.__train_progress['distillation_loss'].append(distill_loss)
+        self.__train_progress['batch'].append(batch)
+        self.__train_progress['hard_loss'].append(hard_loss)
+        self.__train_progress['soft_loss'].append(soft_loss)
         self.__train_progress['final_loss'].append(final_loss)
+        self.__train_progress['acc'].append(accuracy)
+        self.__train_progress['learning_rate'].append(learning_rate)
         self.__train_progress['timestamp'].append(time.time())
 
 
     def __record_validation_step(self, epoch, loss, accuracy,):
         self.__validation_progress['epoch'].append(epoch)
-        self.__validation_progress['val_loss'].append(loss)
-        self.__validation_progress['val_acc'].append(accuracy)
+        self.__validation_progress['loss'].append(loss)
+        self.__validation_progress['acc'].append(accuracy)
         self.__validation_progress['timestamp'].append(time.time())
 
 
     def get_train_progress(self):
         return self.__train_progress
-    
+
     def get_validation_progress(self):
         return self.__validation_progress
 
