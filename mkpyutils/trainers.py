@@ -1,6 +1,8 @@
 from torch import manual_seed, inference_mode, argmax, cuda, backends
 from torch import save as save_dict
 from tqdm.auto import tqdm
+from .helpers import report_training, report_validation, report_last_training_step
+from sklearn.metrics import accuracy_score
 import time
 import os
 
@@ -39,7 +41,7 @@ class Trainer:
 
         self.__seed = seed
         self.__valloader = validation_dataloader
-        self.__validation_inference_epoch_step = validation_step
+        self.__validation_step = validation_step
         self.__checkpoint_step = checkpoint_step
 
         self.__train_progress = {
@@ -74,19 +76,12 @@ class Trainer:
                     record_train_progress=False, 
                     record_validation_progress=False, 
                     verbose=True, 
-                    window: int=20, 
+                    window: int=100, 
                     use_tqdm=True, 
                     batch_reporting_step=1):
         
         if self.__seed:
             manual_seed(self.__seed)
-
-        TRAIN_NUM_BATCHES = len(self.__trainloader)
-        TRAIN_BATCH_SIZE = self.__trainloader.batch_size
-
-        if self.__valloader:
-            VAL_NUM_BATCHES = len(self.__valloader)
-            VAL_BATCH_SIZE = self.__valloader.batch_size
         
         if use_tqdm:
             epoch_iterator = tqdm(range(self.__epochs), desc='Epoch: ', leave=False, position=0)
@@ -96,8 +91,6 @@ class Trainer:
         for epoch in epoch_iterator:
             running_loss = 0
             running_acc = 0
-
-            batch_accuracies = []
 
             self.__model.train()
 
@@ -127,96 +120,99 @@ class Trainer:
                 self.__optimizer.step()
                 self.__optimizer.zero_grad()
 
-                batch_accuracies.append((argmax(y_pred, dim=1) == y_train).sum().item())
 
-                # Calculate prediction accuracy
-                accuracy = (argmax(y_pred, dim=1) == y_train).sum().item()
-                running_acc += accuracy
+                # Calculate batch accuracy
+                batch_accuracy = accuracy_score(y_train.cpu(), argmax(y_pred, dim=1).cpu())
+                running_acc += batch_accuracy
 
+                # Calculate batch loss
                 loss = train_loss.item()
                 running_loss += loss
 
+                
                 if record_train_progress:
                     self.__record_training_step(epoch=epoch,
                                                 batch=train_batch_idx,
                                                 loss=loss, 
-                                                accuracy=accuracy / len(y_train),                                                
-                                                )
-
-                # Report train progress to tqdm
+                                                accuracy=batch_accuracy)
+                    
+                # Repost batch training step if verbose is selected
                 if verbose:
-                    if use_tqdm:
-                        batch_iterator.set_postfix_str(f"Train loss: {running_loss / (train_batch_idx+1):.4f} | Train accuracy: {sum(batch_accuracies[-window:]) / (TRAIN_BATCH_SIZE * (window-1) + len(y_train)) * 100:.2f}% | LR: {lr:f}") 
-                    else:
-                        if train_batch_idx % batch_reporting_step == 0:
-                            print(f"Epoch [{epoch+1} / {self.__epochs}], Batch [{train_batch_idx+1} / {len(self.__trainloader)}], Train loss: {running_loss / (train_batch_idx+1):.4f} | Train accuracy: {sum(batch_accuracies[-window:]) / (TRAIN_BATCH_SIZE * (window-1) + len(y_train)) * 100:.2f}% | LR: {lr:f}")
-
+                    report_training(current_epoch=epoch,
+                                    total_epochs=self.__epochs,
+                                    acc = batch_accuracy,
+                                    loss=loss,
+                                    current_batch=train_batch_idx,
+                                    total_batches=len(self.__trainloader),
+                                    learning_rate=lr,
+                                    use_tqdm=use_tqdm,
+                                    reporting_step=batch_reporting_step,
+                                    batch_iterator=batch_iterator)
+                    
+            # END OF EPOCH------------------------
             # Save snapshot
             if self.__checkpoint_step > 0 and self.__checkpoint_step % epoch+1 == 0:
                 self.save_model_dictionary(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)
             
-            if self.__valloader:
-                running_loss, running_acc = self.__validation(epoch=epoch, 
-                                                              record_validation_progress=record_validation_progress, 
-                                                              use_tqdm=use_tqdm)
-                if verbose:
-                    if use_tqdm:
-                        epoch_iterator.set_postfix_str(f"Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
-                    else:
-                        print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
-            
+            # If a test dataset is provided perform validation step and make an epoch report
+            if self.__valloader is not None:
+                if epoch % self.__validation_step == 0 or epoch == self.__epochs-1:
+                    val_loss, val_acc = self.__validation(epoch=epoch, 
+                                                            record_validation_progress=record_validation_progress, 
+                                                            use_tqdm=use_tqdm)
+                    
+                    report_validation(acc=val_acc,
+                                      loss=val_loss,
+                                      current_epoch=epoch,
+                                      total_epochs=self.__epochs,
+                                      use_tqdm=use_tqdm,
+                                      epoch_iterator=epoch_iterator)
+                    
+
+            # If no test validation is provided report last training step matrics to epoch report
             else:
-                if verbose:
-                    if use_tqdm:
-                        epoch_iterator.set_postfix_str(f"{epoch+1}: Training loss: {running_loss / (train_batch_idx+1):.4f} | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
-                    else:
-                        print(f"  => Epoch [{epoch+1} / {self.__epochs}], Training loss: {running_loss / (train_batch_idx+1):.4f} | Training accuracy: {running_acc / (TRAIN_BATCH_SIZE * (train_batch_idx) + len(y_train)) * 100:.2f}%")
+                report_last_training_step(acc =running_acc / len(self.__trainloader), 
+                                          loss=running_loss / len(self.__trainloader),
+                                          epoch=epoch,
+                                          use_tqdm=use_tqdm,
+                                          epoch_iterator=epoch_iterator)
 
             if self.__scheduler:
-                self.__scheduler.step()
-        
-        
-        if self.__valloader and not verbose:
-            running_loss, running_acc = self.__validation(epoch=epoch, 
-                                                            record_validation_progress=False, 
-                                                            use_tqdm=False)
-        
-            print(f"  => Epoch [{epoch+1} / {self.__epochs}], Validation loss: {running_loss / VAL_NUM_BATCHES:.4f} | Validation accuracy: {running_acc / len(self.__valloader) * 100:.2f}%")
+                self.__scheduler.step()        
 
 
     def __validation(self, epoch, record_validation_progress, use_tqdm):
-        if epoch % self.__validation_inference_epoch_step == 0 or epoch == self.__epochs-1:
-            running_acc = 0
-            running_loss = 0
+        running_accuracy = 0
+        running_loss = 0
 
-            self.__model.eval()
+        self.__model.eval()
 
-            with inference_mode():                
-                if use_tqdm:
-                    validation_batch_iterator = tqdm(self.__valloader, total=len(self.__valloader), desc="Validation: ", leave=False, position=2)
-                else:
-                    validation_batch_iterator = self.__valloader
+        with inference_mode():
+            if use_tqdm:
+                vallidation_batch_iterator = tqdm(self.__valloader, total=len(self.__valloader), desc="Validation: ", leave=False, position=2)
+            else:
+                vallidation_batch_iterator = self.__valloader
 
-                for val_batch_idx, (X_test, y_test) in enumerate(validation_batch_iterator):
-                    X_test, y_test = X_test.to(self.__device), y_test.to(self.__device)
+            for X_test, y_test in vallidation_batch_iterator:
+                X_test, y_test = X_test.to(self.__device), y_test.to(self.__device)
 
-                    y_pred_test = self.__model(X_test)
+                y_pred_test = self.__model(X_test)
 
-                    if y_pred_test.shape[-1] == 1:
-                        y_test = y_test.unsqueeze(dim=1).float()
+                if y_pred_test.shape[-1] == 1:
+                    y_test = y_test.unsqueeze(dim=1).float()
 
-                    val_loss = self.__loss_fn(y_pred_test, y_test)
+                val_loss = self.__loss_fn(y_pred_test, y_test)
 
-                    loss = val_loss.item()
-                    running_loss += loss
+                loss = val_loss.item()
+                running_loss += loss
 
-                    accuracy = (argmax(y_pred_test, dim=1) == y_test).sum().item() / len(y_test)
-                    running_acc += accuracy
+                accuracy = accuracy_score(y_test.cpu(), argmax(y_pred_test, dim=1).cpu())
+                running_accuracy += accuracy               
 
-                if record_validation_progress: 
-                    self.__record_validation_step(epoch, loss, accuracy)
-            
-            return running_loss, running_acc
+        if record_validation_progress:
+            self.__record_validation_step(epoch, loss, accuracy)
+
+        return loss / len(self.__valloader), running_accuracy / len(self.__valloader)
 
 
     def __record_training_step(self, epoch, batch, loss, accuracy):
