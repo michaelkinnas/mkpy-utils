@@ -4,45 +4,6 @@ from os import listdir, path, walk
 from random import Random
 from torch.utils.data import Dataset
 
-# class TinyImageNet(Dataset):
-#     def __init__(self, root: str, transform = None, target_transform = None, task = 'classification', split = 'train', seed=None):
-#         '''
-#         Currently only classification task is supported.
-#         '''            
-#         self.transform = transform
-#         self.target_transform = target_transform
-#         self.random = Random(seed)
-
-#         images = []
-#         for i, classdir in enumerate(listdir(path.join(root, "train"))):
-#             for image in listdir(path.join(root, "train", classdir, "images")):
-#                 img = Image.open(path.join(root, "train", classdir, "images", image))
-#                 if img.mode not in ['RGB']:
-#                     img = img.convert('RGB')
-#                 images.append((array(img), i))
-
-#         # shuffle images
-#         self.random.shuffle(images)
-#         self.data = [x[0] for x in images]
-#         self.targets = [x[1] for x in images]
-
-#     def __len__(self):
-#         return len(self.data)
-    
-#     def __getitem__(self, idx):
-#         img, target = self.data[idx], self.targets[idx]
-
-#         img = Image.fromarray(img)
-
-#         if self.transform is not None:
-#             img = self.transform(img)
-
-#         if self.target_transform is not None:
-#             target = self.target_transform(target)
-
-#         return img, target
-    
-
 
 class TinyImageNet(Dataset):
     def __init__(self, root: str, transform=None, target_transform=None, task: str='classification', split: str='train', split_ratio: float=0.80, seed=None):

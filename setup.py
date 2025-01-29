@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="mkpyutils",
-    version="0.2",
+    version="0.3",
     packages=find_packages(),
     install_requires=['torch>=2.0.0', 'tqdm>=4.67.0'],
     author="Michael Kinnas",

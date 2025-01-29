@@ -179,34 +179,49 @@ class ResponseDistiller:
                 self.save_model_weights(f'./weights_ep:{epoch+1}.pth', append_accuracy=True)
 
             
-            # If a test dataset is provided perform validation step and make an epoch report
-            if self.__valloader is not None:
-                if epoch % self.__validation_step == 0 or epoch == self.__epochs-1:
-                    val_loss, val_acc = self.__validation(epoch=epoch, 
-                                                            record_validation_progress=record_validation_progress, 
-                                                            use_tqdm=use_tqdm)
-                    
-                    report_validation(acc=val_acc,
-                                      loss=val_loss,
-                                      current_epoch=epoch,
-                                      total_epochs=self.__epochs,
-                                      use_tqdm=use_tqdm,
-                                      epoch_iterator=epoch_iterator)
+            # In case of verbose:
+            #   If a test dataset is provided perform validation step and make an epoch report
+            #   If no test dataset is provided report last training step matrics to epoch report 
+            if verbose:
+                if self.__valloader is not None:
+                    if epoch % self.__validation_step == 0 and epoch != self.__epochs-1:
+                        val_loss, val_acc = self.__validation(epoch=epoch, 
+                                                                record_validation_progress=record_validation_progress, 
+                                                                use_tqdm=use_tqdm)
+                        
+                        report_validation(acc=val_acc,
+                                        loss=val_loss,
+                                        current_epoch=epoch,
+                                        total_epochs=self.__epochs,
+                                        use_tqdm=use_tqdm,
+                                        epoch_iterator=epoch_iterator)
             
-
-            # If no test validation is provided report last training step matrics to epoch report
-            else:
-                report_last_training_step(acc =running_acc / len(self.__trainloader), 
-                                          loss=running_loss / len(self.__trainloader),
-                                          epoch=epoch,
-                                          use_tqdm=use_tqdm,
-                                          epoch_iterator=epoch_iterator)
+                else:
+                    report_last_training_step(acc =running_acc / len(self.__trainloader), 
+                                            loss=running_loss / len(self.__trainloader),
+                                            epoch=epoch,
+                                            use_tqdm=use_tqdm,
+                                            epoch_iterator=epoch_iterator)
 
                     
             if self.__scheduler:
                 self.__scheduler.step()
 
+
         # ENF OF TRAINING -----
+        if self.__valloader:
+            val_loss, val_acc = self.__validation(epoch=None, 
+                                                    record_validation_progress=False, 
+                                                    use_tqdm=False)
+            
+            report_validation(acc=val_acc,
+                            loss=val_loss,
+                            current_epoch=self.__epochs-1,
+                            total_epochs=self.__epochs,
+                            use_tqdm=False,
+                            # acc_rate=diff(acc_hist, 1, prepend=0),
+                            # loss_rate=diff(loss_hist, 1, prepend=0),
+                            epoch_iterator=None)
 
 
     
@@ -269,9 +284,11 @@ class ResponseDistiller:
     def get_train_progress(self):
         return self.__train_progress
 
+    
     def get_validation_progress(self):
         return self.__validation_progress
 
+    
     def save_model_weights(self, filepath, append_accuracy=False):
         dir = os.path.dirname(filepath)
         filename, ext = os.path.splitext(os.path.basename(filepath))
